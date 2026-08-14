@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="100%" height="100%">
+  <defs>
+    <!-- Background Circle Radial Gradient -->
+    <radialGradient id="bgGrad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#0f192e" />
+      <stop offset="70%" stop-color="#070c18" />
+      <stop offset="100%" stop-color="#04070f" />
+    </radialGradient>
+
+    <!-- Gold Metallic Gradients -->
+    <linearGradient id="goldLight" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fef08a" />
+      <stop offset="30%" stop-color="#f59e0b" />
+      <stop offset="70%" stop-color="#d97706" />
+      <stop offset="100%" stop-color="#78350f" />
+    </linearGradient>
+
+    <linearGradient id="goldShine" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#b45309" />
+      <stop offset="40%" stop-color="#fef08a" />
+      <stop offset="70%" stop-color="#f59e0b" />
+      <stop offset="100%" stop-color="#fffbeb" />
+    </linearGradient>
+
+    <!-- Glow Effect -->
+    <filter id="goldGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Outer Dark Badge Background -->
+  <circle cx="250" cy="250" r="240" fill="url(#bgGrad)" stroke="url(#goldLight)" stroke-width="4" />
+  <circle cx="250" cy="250" r="232" fill="none" stroke="url(#goldShine)" stroke-width="1.5" opacity="0.6" />
+
+  <!-- Outer Arc Tech Orbit -->
+  <path d="M 180 85 A 180 180 0 0 1 365 145" fill="none" stroke="url(#goldShine)" stroke-width="3" stroke-linecap="round" />
+  <circle cx="365" cy="145" r="4" fill="#fef08a" filter="url(#goldGlow)" />
+
+  <!-- Unicorn Silhouette Head & Neck -->
+  <g id="unicorn">
+    <!-- Horn -->
+    <path d="M 142 80 L 202 145 L 180 135 Z" fill="url(#goldShine)" />
+    <!-- Head Contour -->
+    <path d="M 218 112 C 185 130 162 155 162 188 C 162 205 178 220 195 210 C 220 195 235 180 252 170 C 270 160 282 178 275 200 C 265 228 232 280 222 308 C 220 315 222 322 228 322 C 248 318 275 260 285 220 C 292 192 288 152 270 132 C 252 112 232 110 218 112 Z" fill="url(#goldLight)" />
+    <!-- Ear -->
+    <path d="M 215 112 L 232 88 L 238 122 Z" fill="url(#goldShine)" />
+  </g>
+
+  <!-- Circuit Board Tech Traces Flowing off the Mane -->
+  <g id="circuitry" stroke="url(#goldShine)" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Trace 1 -->
+    <path d="M 255 118 L 285 118 L 305 138 L 335 138" />
+    <circle cx="335" cy="138" r="5" fill="url(#goldShine)" stroke="none" />
+    
+    <!-- Trace 2 -->
+    <path d="M 270 142 L 310 142 L 330 162 L 360 162" />
+    <circle cx="360" cy="162" r="5" fill="url(#goldShine)" stroke="none" />
+
+    <!-- Trace 3 -->
+    <path d="M 285 172 L 315 172 L 338 195 L 372 195" />
+    <circle cx="372" cy="195" r="5" fill="url(#goldShine)" stroke="none" />
+
+    <!-- Trace 4 -->
+    <path d="M 282 205 L 325 205 L 350 230 L 380 230" />
+    <circle cx="380" cy="230" r="5" fill="url(#goldShine)" stroke="none" />
+
+    <!-- Trace 5 -->
+    <path d="M 278 240 L 318 240 L 338 260 L 368 260" />
+    <circle cx="368" cy="260" r="5" fill="url(#goldShine)" stroke="none" />
+
+    <!-- Trace 6 -->
+    <path d="M 265 272 L 298 272 L 320 295 L 350 295" />
+    <circle cx="350" cy="295" r="5" fill="url(#goldShine)" stroke="none" />
+
+    <!-- Trace 7 -->
+    <path d="M 245 302 L 275 302 L 295 322 L 335 322" />
+    <circle cx="335" cy="322" r="5" fill="url(#goldShine)" stroke="none" />
+  </g>
+
+  <!-- Typography: UNIKORN360 -->
+  <text x="250" y="375" text-anchor="middle" font-family="'Plus Jakarta Sans', 'Inter', sans-serif" font-weight="900" font-size="44" letter-spacing="3" fill="url(#goldShine)">UNIKORN360</text>
+
+  <!-- Divider Lines for Subtitle -->
+  <line x1="108" y1="395" x2="155" y2="395" stroke="url(#goldLight)" stroke-width="1.5" />
+  <!-- Typography: AI SOLUTIONS -->
+  <text x="250" y="401" text-anchor="middle" font-family="'Plus Jakarta Sans', 'Inter', sans-serif" font-weight="800" font-size="18" letter-spacing="6" fill="#ffffff">AI SOLUTIONS</text>
+  <line x1="345" y1="395" x2="392" y2="395" stroke="url(#goldLight)" stroke-width="1.5" />
+</svg>

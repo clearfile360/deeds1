@@ -1,0 +1,75 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "User account profile with role-based access control",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "photo": { "type": "string" },
+        "role": { 
+          "type": "string", 
+          "enum": ["Super Admin", "Admin", "Lawyer", "Document Writer", "Broker", "Client", "Auditor", "Data Entry Operator"] 
+        },
+        "status": { 
+          "type": "string", 
+          "enum": ["Approved", "Pending Approval", "Suspended"] 
+        },
+        "organization": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["uid", "name", "email", "role", "status", "createdAt"]
+    },
+    "Document": {
+      "title": "Deed Document Draft",
+      "description": "Tamil Nadu registration deed document draft",
+      "type": "object",
+      "properties": {
+        "docNo": { "type": "string" },
+        "docType": { "type": "string" },
+        "subType": { "type": "string" },
+        "partiesCount": { "type": "number" },
+        "propertyAddress": { "type": "string" },
+        "consideration": { "type": "number" },
+        "status": { "type": "string" },
+        "writer": { "type": "string" },
+        "progress": { "type": "number" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "modifiedAt": { "type": "string" }
+      },
+      "required": ["docNo", "docType", "createdBy", "createdAt"]
+    },
+    "AuditLog": {
+      "title": "Security Audit Log",
+      "description": "System event and security audit trail entry",
+      "type": "object",
+      "properties": {
+        "timestamp": { "type": "string" },
+        "type": { "type": "string" },
+        "message": { "type": "string" },
+        "ip": { "type": "string" },
+        "device": { "type": "string" },
+        "browser": { "type": "string" },
+        "userEmail": { "type": "string" }
+      },
+      "required": ["timestamp", "type", "message", "userEmail"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User account profiles"
+    },
+    "/documents/{documentId}": {
+      "schema": { "$ref": "#/entities/Document" },
+      "description": "Deed drafts and documents"
+    },
+    "/audit_logs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "System audit trail entries"
+    }
+  }
+}
