@@ -87,6 +87,8 @@ export interface DbDocument {
   createdAt: string;
   modifiedAt: string;
   createdBy: string;
+  createdByUserId?: string;
+  createdByEmail?: string;
   state: any; // Full DeedWizardState
 }
 
@@ -542,6 +544,8 @@ export const db = {
             createdAt: r.created_at,
             modifiedAt: r.modified_at,
             createdBy: r.created_by,
+            createdByUserId: r.created_by_user_id || state?.createdByUserId || undefined,
+            createdByEmail: r.created_by_email || r.created_by || state?.createdByEmail || undefined,
             state: state
           });
         }
@@ -558,7 +562,11 @@ export const db = {
           if (clonedDoc.state && Array.isArray(clonedDoc.state.parties)) {
             clonedDoc.state.parties = decryptParties(clonedDoc.state.parties);
           }
-          uniqueDocs.push(clonedDoc);
+          uniqueDocs.push({
+            ...clonedDoc,
+            createdByUserId: clonedDoc.createdByUserId || clonedDoc.state?.createdByUserId || undefined,
+            createdByEmail: clonedDoc.createdByEmail || clonedDoc.createdBy || clonedDoc.state?.createdByEmail || undefined,
+          });
         }
       }
       return uniqueDocs;

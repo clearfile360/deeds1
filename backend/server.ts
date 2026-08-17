@@ -15,7 +15,7 @@ import {
   aiCheckDeedFraudRisk 
 } from './ai';
 import { db, DbUser, DbClient, DbDocument, DbAuditLog, migrateAndBootstrap, getMasterDataEngine } from './db';
-import { serializeClient, serializeDocument, getDeterministicHash } from './pii.js';
+import { serializeClient, serializeDocument, getDeterministicHash } from './pii';
 
 dotenv.config();
 
@@ -154,6 +154,7 @@ type UserRole =
 
 interface PermissionRequest extends Request {
   user?: {
+    id?: string;
     email: string;
     role: UserRole;
   };
@@ -176,6 +177,7 @@ const authMiddleware = async (req: PermissionRequest, res: Response, next: NextF
           const defaultRole: UserRole = isSuperAdmin ? 'Super Admin' : 'Document Writer';
 
           req.user = {
+            id: user.id,
             email: user.email,
             role: matched ? (matched.role as UserRole) : (user.user_metadata?.role || defaultRole),
           };
@@ -189,7 +191,9 @@ const authMiddleware = async (req: PermissionRequest, res: Response, next: NextF
 
   // Fallback to headers for local/testing requests
   const fallbackEmail = (req.headers['x-user-email'] as string) || '';
+  const fallbackId = (req.headers['x-user-id'] as string) || '';
   req.user = {
+    id: fallbackId,
     email: fallbackEmail,
     role: (req.headers['x-user-role'] as UserRole) || (SUPER_ADMIN_EMAILS.includes(fallbackEmail.toLowerCase()) ? 'Super Admin' : 'Document Writer'),
   };
@@ -268,13 +272,19 @@ const requireResourceAccess = (resourceType: 'documents' | 'clients' | 'audits')
         }
 
         // Apply rules:
+        const currentUid = fullUser.id || req.user?.id;
+        const currentEmail = (fullUser.email || req.user?.email || '').toLowerCase();
+
         // - Document Writer / Lawyer: only documents created by them OR explicitly assigned to them
-        if (role === 'Document Writer' || role === 'Lawyer') {
-          const isOwner = doc.createdBy === fullUser.email || 
+        if (role === 'Document Writer' || role === 'Lawyer' || role === 'Data Entry Operator') {
+          const isOwner = (currentUid && doc.createdByUserId === currentUid) ||
+                          (currentEmail && doc.createdByEmail?.toLowerCase() === currentEmail) ||
+                          (currentEmail && doc.createdBy?.toLowerCase() === currentEmail) || 
                           doc.writer === fullUser.name || 
-                          doc.state?.createdBy === fullUser.email ||
-                          doc.state?.assignedTo === fullUser.id || 
-                          doc.state?.assignedTo === fullUser.email;
+                          (currentUid && doc.state?.createdByUserId === currentUid) ||
+                          (currentEmail && doc.state?.createdBy?.toLowerCase() === currentEmail) ||
+                          (currentUid && doc.state?.assignedTo === currentUid) || 
+                          (currentEmail && doc.state?.assignedTo?.toLowerCase() === currentEmail);
           if (!isOwner) {
             return res.status(403).json({ error: 'Access Denied: You do not own or have assignment to this document.' });
           }
@@ -291,9 +301,11 @@ const requireResourceAccess = (resourceType: 'documents' | 'clients' | 'audits')
           const brokerClientPhones = brokerClients.map(c => c.phone).filter(Boolean);
 
           const isRelatedDoc = 
-            doc.createdBy === fullUser.email ||
-            doc.state?.assignedTo === fullUser.id || 
-            doc.state?.assignedTo === fullUser.email ||
+            (currentUid && doc.createdByUserId === currentUid) ||
+            (currentEmail && doc.createdByEmail?.toLowerCase() === currentEmail) ||
+            (currentEmail && doc.createdBy?.toLowerCase() === currentEmail) ||
+            (currentUid && doc.state?.assignedTo === currentUid) || 
+            (currentEmail && doc.state?.assignedTo?.toLowerCase() === currentEmail) ||
             doc.state?.brokerId === fullUser.id ||
             doc.state?.brokerEmail === fullUser.email ||
             doc.state?.parties?.some((p: any) => 
@@ -308,8 +320,10 @@ const requireResourceAccess = (resourceType: 'documents' | 'clients' | 'audits')
         // - Client: only own documents
         else if (role === 'Client') {
           const isOwnDoc = 
-            doc.createdBy === fullUser.email || 
-            doc.state?.parties?.some((p: any) => p.email?.toLowerCase() === fullUser.email.toLowerCase());
+            (currentUid && doc.createdByUserId === currentUid) ||
+            (currentEmail && doc.createdByEmail?.toLowerCase() === currentEmail) ||
+            (currentEmail && doc.createdBy?.toLowerCase() === currentEmail) || 
+            doc.state?.parties?.some((p: any) => p.email?.toLowerCase() === currentEmail);
           if (!isOwnDoc) {
             return res.status(403).json({ error: 'Access Denied: You can only access your own documents.' });
           }
@@ -936,42 +950,48 @@ app.get('/api/documents', authMiddleware, async (req, res) => {
   const docs = await db.getDocuments();
   
   const dbUsers = await db.getUsers();
-  const fullUser = dbUsers.find(u => u.email.toLowerCase() === req.user?.email?.toLowerCase());
-  if (!fullUser) {
-    return res.status(403).json({ error: 'Access Denied: User profile not found.' });
-  }
+  const fullUser = dbUsers.find(u => 
+    (req.user?.email && u.email.toLowerCase() === req.user.email.toLowerCase()) ||
+    (req.user?.id && u.id === req.user.id)
+  );
 
-  const role = fullUser.role;
-  const userEmail = fullUser.email;
+  const role = fullUser ? (fullUser.role as UserRole) : (req.user?.role || 'Client');
+  const userEmail = (fullUser?.email || req.user?.email || '').toLowerCase();
+  const userId = fullUser?.id || req.user?.id || '';
 
   let filteredDocs = docs;
 
   if (role === 'Super Admin' || role === 'Admin' || role === 'Auditor') {
     // Admins, Super Admins, and Auditors can view all documents
-  } else if (role === 'Document Writer' || role === 'Lawyer') {
+  } else if (role === 'Document Writer' || role === 'Lawyer' || role === 'Data Entry Operator') {
     filteredDocs = docs.filter(d => 
-      d.createdBy === userEmail || 
-      d.writer === fullUser.name || 
-      d.state?.createdBy === userEmail ||
-      d.state?.assignedTo === fullUser.id || 
-      d.state?.assignedTo === userEmail
+      (userId && d.createdByUserId === userId) ||
+      (userEmail && d.createdByEmail?.toLowerCase() === userEmail) ||
+      (userEmail && d.createdBy?.toLowerCase() === userEmail) || 
+      (fullUser?.name && d.writer === fullUser.name) || 
+      (userId && d.state?.createdByUserId === userId) ||
+      (userEmail && d.state?.createdBy?.toLowerCase() === userEmail) ||
+      (userId && d.state?.assignedTo === userId) || 
+      (userEmail && d.state?.assignedTo?.toLowerCase() === userEmail)
     );
   } else if (role === 'Broker') {
     const clients = await db.getClients();
     const brokerClients = clients.filter((c: any) => 
-      c.assignedTo === fullUser.id || 
-      c.assignedTo === userEmail || 
-      c.createdBy === userEmail
+      (userId && c.assignedTo === userId) || 
+      (userEmail && c.assignedTo?.toLowerCase() === userEmail) || 
+      (userEmail && c.createdBy?.toLowerCase() === userEmail)
     );
     const brokerClientEmails = brokerClients.map(c => c.email.toLowerCase()).filter(Boolean);
     const brokerClientPhones = brokerClients.map(c => c.phone).filter(Boolean);
 
     filteredDocs = docs.filter(d => 
-      d.createdBy === userEmail ||
-      d.state?.assignedTo === fullUser.id || 
-      d.state?.assignedTo === userEmail ||
-      d.state?.brokerId === fullUser.id ||
-      d.state?.brokerEmail === userEmail ||
+      (userId && d.createdByUserId === userId) ||
+      (userEmail && d.createdByEmail?.toLowerCase() === userEmail) ||
+      (userEmail && d.createdBy?.toLowerCase() === userEmail) ||
+      (userId && d.state?.assignedTo === userId) || 
+      (userEmail && d.state?.assignedTo?.toLowerCase() === userEmail) ||
+      (userId && d.state?.brokerId === userId) ||
+      (userEmail && d.state?.brokerEmail?.toLowerCase() === userEmail) ||
       d.state?.parties?.some((p: any) => 
         (p.email && brokerClientEmails.includes(p.email.toLowerCase())) ||
         (p.phone && brokerClientPhones.includes(p.phone))
@@ -979,8 +999,10 @@ app.get('/api/documents', authMiddleware, async (req, res) => {
     );
   } else if (role === 'Client') {
     filteredDocs = docs.filter(d => 
-      d.createdBy === userEmail || 
-      d.state?.parties?.some((p: any) => p.email?.toLowerCase() === userEmail.toLowerCase())
+      (userId && d.createdByUserId === userId) ||
+      (userEmail && d.createdByEmail?.toLowerCase() === userEmail) ||
+      (userEmail && d.createdBy?.toLowerCase() === userEmail) || 
+      d.state?.parties?.some((p: any) => p.email?.toLowerCase() === userEmail)
     );
   } else {
     filteredDocs = [];
@@ -1048,12 +1070,15 @@ app.get('/api/documents/:id', authMiddleware, requireResourceAccess('documents')
   });
 });
 
-app.post('/api/documents', authMiddleware, requirePermission(['Super Admin', 'Admin', 'Document Writer', 'Lawyer', 'Data Entry Operator']), async (req, res) => {
+app.post('/api/documents', authMiddleware, requirePermission(['Super Admin', 'Admin', 'Document Writer', 'Lawyer', 'Data Entry Operator', 'Client', 'Broker']), async (req, res) => {
   const newDraftData = req.body;
   const docs = await db.getDocuments();
 
   const targetId = newDraftData.id || `dft-${Math.floor(1000 + Math.random() * 9000)}`;
   const existingIndex = docs.findIndex(d => d.id === targetId);
+
+  const creatorUserId = req.user?.id || newDraftData.createdByUserId || '';
+  const creatorEmail = req.user?.email || newDraftData.createdByEmail || newDraftData.createdBy || '';
 
   const newDraft: DbDocument = {
     id: targetId,
@@ -1064,11 +1089,13 @@ app.post('/api/documents', authMiddleware, requirePermission(['Super Admin', 'Ad
     propertyAddress: newDraftData.propertyAddress || 'No Address Specified Yet',
     consideration: newDraftData.consideration || 0,
     status: newDraftData.status || 'Draft',
-    writer: newDraftData.writer || (req.user?.email || 'System'),
+    writer: newDraftData.writer || (creatorEmail ? `Drafted by ${creatorEmail}` : 'System'),
     progress: newDraftData.progress || 0,
     createdAt: newDraftData.createdAt || new Date().toISOString(),
-    modifiedAt: new Date().toISOString(),
-    createdBy: req.user?.email || 'system',
+    modifiedAt: newDraftData.modifiedAt || new Date().toISOString(),
+    createdBy: creatorEmail || 'system',
+    createdByUserId: creatorUserId,
+    createdByEmail: creatorEmail,
     state: newDraftData.state
   };
 
@@ -1077,7 +1104,9 @@ app.post('/api/documents', authMiddleware, requirePermission(['Super Admin', 'Ad
       ...docs[existingIndex],
       ...newDraft,
       // Keep original creation date
-      createdAt: docs[existingIndex].createdAt || newDraft.createdAt
+      createdAt: docs[existingIndex].createdAt || newDraft.createdAt,
+      createdByUserId: docs[existingIndex].createdByUserId || newDraft.createdByUserId,
+      createdByEmail: docs[existingIndex].createdByEmail || newDraft.createdByEmail,
     };
   } else {
     docs.unshift(newDraft);
@@ -1086,7 +1115,7 @@ app.post('/api/documents', authMiddleware, requirePermission(['Super Admin', 'Ad
   try {
     await db.saveDocuments(docs);
   } catch (err: any) {
-    return res.status(400).json({ error: err.message });
+    return res.status(500).json({ error: err.message || 'Failed to save document to database.' });
   }
 
   await db.addAuditLog({
@@ -1122,21 +1151,28 @@ app.put('/api/documents/:id', authMiddleware, requireResourceAccess('documents')
   const existingDoc = docs[docIndex];
   
   // Update fields
-  docs[docIndex] = {
+  const updatedDoc: DbDocument = {
     ...existingDoc,
+    docType: updatedData.docType ?? existingDoc.docType,
+    subType: updatedData.subType ?? existingDoc.subType,
     partiesCount: updatedData.partiesCount ?? existingDoc.partiesCount,
     propertyAddress: updatedData.propertyAddress ?? existingDoc.propertyAddress,
     consideration: updatedData.consideration ?? existingDoc.consideration,
     status: updatedData.status ?? existingDoc.status,
     progress: updatedData.progress ?? existingDoc.progress,
+    writer: updatedData.writer ?? existingDoc.writer,
     state: updatedData.state ?? existingDoc.state,
-    modifiedAt: new Date().toISOString()
+    createdByUserId: existingDoc.createdByUserId || updatedData.createdByUserId || req.user?.id,
+    createdByEmail: existingDoc.createdByEmail || updatedData.createdByEmail || req.user?.email,
+    modifiedAt: updatedData.modifiedAt || new Date().toISOString()
   };
+
+  docs[docIndex] = updatedDoc;
 
   try {
     await db.saveDocuments(docs);
   } catch (err: any) {
-    return res.status(400).json({ error: err.message });
+    return res.status(500).json({ error: err.message || 'Failed to persist document.' });
   }
 
   // If status changed to Finalized or Approved, log it distinctly
@@ -1168,7 +1204,7 @@ app.put('/api/documents/:id', authMiddleware, requireResourceAccess('documents')
   });
 });
 
-app.delete('/api/documents/:id', authMiddleware, requirePermission(['Super Admin', 'Admin', 'Document Writer']), requireResourceAccess('documents'), async (req, res) => {
+app.delete('/api/documents/:id', authMiddleware, requirePermission(['Super Admin', 'Admin', 'Document Writer', 'Lawyer', 'Data Entry Operator', 'Client']), requireResourceAccess('documents'), async (req, res) => {
   const { id } = req.params;
   const docs = await db.getDocuments();
 

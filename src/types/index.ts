@@ -228,6 +228,8 @@ export interface SavedDraft {
   createdAt: string;
   modifiedAt: string;
   createdBy: string;
+  createdByUserId?: string;
+  createdByEmail?: string;
   state: DeedWizardState;
   version?: number;
   revisionHistory?: { docNo: string; status: DraftStatus; modifiedAt: string; version: number }[];

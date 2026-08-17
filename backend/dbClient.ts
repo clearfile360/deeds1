@@ -160,6 +160,13 @@ export async function initDatabase() {
     )
   `);
 
+  await execute(`
+    ALTER TABLE documents ADD COLUMN IF NOT EXISTS created_by_user_id VARCHAR(255)
+  `);
+  await execute(`
+    ALTER TABLE documents ADD COLUMN IF NOT EXISTS created_by_email VARCHAR(255)
+  `);
+
   // 4. Create Audit Logs Table
   await execute(`
     CREATE TABLE IF NOT EXISTS audit_logs (

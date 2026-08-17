@@ -57,7 +57,7 @@ interface AppContextType {
   currentDraft: SavedDraft | null;
   activeStep: number;
   setActiveStep: (step: number) => void;
-  autosaveStatus: 'Saving...' | 'Saved' | 'Save Failed' | null;
+  autosaveStatus: 'Saving...' | 'Saved' | 'Saved (Local only)' | 'Save Failed' | null;
   clients: ClientProfile[];
   notifications: SystemNotification[];
   
@@ -240,7 +240,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [activeStep, setActiveStep] = useState<number>(1);
   const [currentDraft, setCurrentDraft] = useState<SavedDraft | null>(null);
-  const [autosaveStatus, setAutosaveStatus] = useState<'Saving...' | 'Saved' | 'Save Failed' | null>(null);
+  const [autosaveStatus, setAutosaveStatus] = useState<'Saving...' | 'Saved' | 'Saved (Local only)' | 'Save Failed' | null>(null);
   
   const [savedDrafts, setSavedDrafts] = useState<SavedDraft[]>([]);
   const [clients, setClients] = useState<ClientProfile[]>(DUMMY_CLIENTS);
@@ -248,6 +248,77 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const autosaveTimerRef = useRef<NodeJS.Timeout | null>(null);
   const isAutosavingRef = useRef<boolean>(false);
+
+  /**
+   * User-scoped storage helpers for isolation across accounts
+   */
+  const getUserDraftsStorageKey = (user?: UserAccount | null): string => {
+    const targetUser = user !== undefined ? user : currentUser;
+    const uid = targetUser?.id || targetUser?.uid;
+    if (uid) {
+      return `unikorn360_saved_drafts_${uid}`;
+    }
+    const email = targetUser?.email;
+    if (email) {
+      return `unikorn360_saved_drafts_${email.toLowerCase().replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+    }
+    return `unikorn360_saved_drafts_anonymous`;
+  };
+
+  const loadLocalDraftsForUser = (user?: UserAccount | null): SavedDraft[] => {
+    const key = getUserDraftsStorageKey(user);
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((d: any) => d && d.id);
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to read user drafts from localStorage:", e);
+    }
+    return [];
+  };
+
+  const saveUserDraftsToDisk = (draftsList: SavedDraft[], user?: UserAccount | null): boolean => {
+    const key = getUserDraftsStorageKey(user);
+    try {
+      localStorage.setItem(key, JSON.stringify(draftsList));
+      return true;
+    } catch (e) {
+      console.error("Failed to write drafts to user storage key", key, e);
+      return false;
+    }
+  };
+
+  const mergeDraftsDeterministic = (localDrafts: SavedDraft[], remoteDrafts: SavedDraft[]): SavedDraft[] => {
+    const draftMap = new Map<string, SavedDraft>();
+
+    // Insert remote drafts first
+    for (const doc of remoteDrafts) {
+      if (doc && doc.id) {
+        draftMap.set(doc.id, doc);
+      }
+    }
+
+    // Merge local drafts, using newer modifiedAt
+    for (const localDoc of localDrafts) {
+      if (!localDoc || !localDoc.id) continue;
+      if (!draftMap.has(localDoc.id)) {
+        draftMap.set(localDoc.id, localDoc);
+      } else {
+        const remoteDoc = draftMap.get(localDoc.id)!;
+        const localTime = new Date(localDoc.modifiedAt || localDoc.createdAt || 0).getTime();
+        const remoteTime = new Date(remoteDoc.modifiedAt || remoteDoc.createdAt || 0).getTime();
+        if (localTime >= remoteTime) {
+          draftMap.set(localDoc.id, localDoc);
+        }
+      }
+    }
+
+    return Array.from(draftMap.values());
+  };
 
   /**
    * Safe asynchronous Supabase session token retrieval for API headers
@@ -266,6 +337,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return {
       'Content-Type': 'application/json',
       ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+      'x-user-id': currentUser?.id || currentUser?.uid || '',
       'x-user-email': currentUser?.email || '',
       'x-user-role': effectiveRole || 'Client'
     };
@@ -331,7 +403,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       
       const headers = await getAuthHeaders();
 
-      // Sync Documents
+      // Step 1: Ensure current user local drafts are loaded
+      const currentLocal = loadLocalDraftsForUser(currentUser);
+      if (currentLocal.length > 0) {
+        setSavedDrafts(currentLocal);
+      }
+
+      // Step 2: Sync Documents with remote backend API
       try {
         const docRes = await fetch('/api/documents', { headers });
         if (docRes.ok) {
@@ -339,53 +417,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const remoteDocs = Array.isArray(remoteDocsRaw) 
             ? remoteDocsRaw.filter((d: any, index: number, self: any[]) => d && d.id && self.findIndex((t: any) => t.id === d.id) === index)
             : [];
-          if (remoteDocs && remoteDocs.length > 0) {
-            setSavedDrafts(remoteDocs);
-            localStorage.setItem('unikorn360_saved_drafts', JSON.stringify(remoteDocs));
-          } else {
-            // Seed backend with local drafts if empty
-            const localRaw = localStorage.getItem('unikorn360_saved_drafts');
-            if (localRaw) {
-              const parsed = JSON.parse(localRaw);
-              const uniqueParsed = Array.isArray(parsed)
-                ? parsed.filter((d: any, index: number, self: any[]) => d && d.id && self.findIndex((t: any) => t.id === d.id) === index)
-                : [];
-              setSavedDrafts(uniqueParsed);
-              for (const draft of uniqueParsed) {
-                await fetch('/api/documents', {
-                  method: 'POST',
+          
+          // Deterministic merge
+          const merged = mergeDraftsDeterministic(currentLocal, remoteDocs);
+          setSavedDrafts(merged);
+          saveUserDraftsToDisk(merged, currentUser);
+
+          // Push any local-only or newer local drafts up to backend
+          for (const draft of merged) {
+            const remoteDoc = remoteDocs.find((r: any) => r.id === draft.id);
+            if (!remoteDoc) {
+              fetch('/api/documents', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(draft)
+              }).catch(e => console.warn('Background draft push notice:', e));
+            } else {
+              const localTime = new Date(draft.modifiedAt || draft.createdAt || 0).getTime();
+              const remoteTime = new Date(remoteDoc.modifiedAt || remoteDoc.createdAt || 0).getTime();
+              if (localTime > remoteTime) {
+                fetch(`/api/documents/${draft.id}`, {
+                  method: 'PUT',
                   headers,
                   body: JSON.stringify(draft)
-                });
+                }).catch(e => console.warn('Background draft update notice:', e));
               }
-            } else {
-              loadDefaultDummies();
             }
           }
         } else {
-          // Fallback to local
-          const localRaw = localStorage.getItem('unikorn360_saved_drafts');
-          if (localRaw) {
-            const parsed = JSON.parse(localRaw);
-            const uniqueParsed = Array.isArray(parsed)
-              ? parsed.filter((d: any, index: number, self: any[]) => d && d.id && self.findIndex((t: any) => t.id === d.id) === index)
-              : [];
-            setSavedDrafts(uniqueParsed);
-          } else {
-            loadDefaultDummies();
-          }
+          // If remote fails, DO NOT clear drafts! Keep local drafts intact.
+          console.warn(`Remote /api/documents returned ${docRes.status}, keeping local user drafts intact.`);
         }
       } catch (err) {
-        const localRaw = localStorage.getItem('unikorn360_saved_drafts');
-        if (localRaw) {
-          const parsed = JSON.parse(localRaw);
-          const uniqueParsed = Array.isArray(parsed)
-            ? parsed.filter((d: any, index: number, self: any[]) => d && d.id && self.findIndex((t: any) => t.id === d.id) === index)
-            : [];
-          setSavedDrafts(uniqueParsed);
-        } else {
-          loadDefaultDummies();
-        }
+        // Network error - KEEP local drafts intact
+        console.warn('Network failure accessing /api/documents, keeping local user drafts intact:', err);
       }
 
       // Sync Clients
@@ -415,28 +480,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               });
             }
           }
-        } else {
-          const localClientsRaw = localStorage.getItem('unikorn360_clients');
-          if (localClientsRaw) {
-            const parsed = JSON.parse(localClientsRaw);
-            const uniqueParsed = Array.isArray(parsed)
-              ? parsed.filter((c: any, index: number, self: any[]) => c && c.id && self.findIndex((t: any) => t.id === c.id) === index)
-              : [];
-            setClients(uniqueParsed);
-          }
         }
-      } catch (e) {
-        const localClientsRaw = localStorage.getItem('unikorn360_clients');
-        if (localClientsRaw) {
-          const parsed = JSON.parse(localClientsRaw);
-          const uniqueParsed = Array.isArray(parsed)
-            ? parsed.filter((c: any, index: number, self: any[]) => c && c.id && self.findIndex((t: any) => t.id === c.id) === index)
-            : [];
-          setClients(uniqueParsed);
-        }
+      } catch (err) {
+        console.warn("Client sync network error:", err);
       }
-    } catch (globalSyncErr) {
-      console.warn('syncDatabase non-fatal warning:', globalSyncErr);
+    } catch (e) {
+      console.warn('Notice: Database sync handled gracefully:', e);
     }
   };
 
@@ -449,18 +498,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const initializeSupabaseAuth = async () => {
       try {
-        // Step 1: Query initial session from Supabase client (handles redirected OAuth URL fragments automatically)
+        // Step 1: Query initial session from Supabase client
         const session = await getActiveSession();
         if (isMounted) {
           if (session?.user) {
             const profile = mapSupabaseUserToUserAccount(session.user);
             setCurrentUser(profile);
             localStorage.setItem('unikorn_authenticated_user', JSON.stringify(profile));
+            const userDrafts = loadLocalDraftsForUser(profile);
+            setSavedDrafts(userDrafts);
           } else {
             // Check if there is a cached user profile
             const cached = localStorage.getItem('unikorn_authenticated_user');
-            if (!cached) {
+            if (cached) {
+              try {
+                const parsed = JSON.parse(cached);
+                setCurrentUser(parsed);
+                const userDrafts = loadLocalDraftsForUser(parsed);
+                setSavedDrafts(userDrafts);
+              } catch (e) {
+                setCurrentUser(null);
+                setSavedDrafts([]);
+              }
+            } else {
               setCurrentUser(null);
+              setSavedDrafts([]);
             }
           }
         }
@@ -484,10 +546,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const profile = mapSupabaseUserToUserAccount(session.user);
           setCurrentUser(profile);
           localStorage.setItem('unikorn_authenticated_user', JSON.stringify(profile));
+          const userDrafts = loadLocalDraftsForUser(profile);
+          setSavedDrafts(userDrafts);
         }
         setAuthLoading(false);
       } else if (event === 'SIGNED_OUT') {
         setCurrentUser(null);
+        setCurrentDraft(null);
+        setSavedDrafts([]);
         setSimulationRole(null);
         localStorage.removeItem('unikorn_authenticated_user');
         localStorage.removeItem('unikorn_simulation_role');
@@ -624,12 +690,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Save drafts when changed
   const saveAllDraftsToDisk = (draftsList: SavedDraft[]) => {
-    try {
-      localStorage.setItem('unikorn360_saved_drafts', JSON.stringify(draftsList));
-    } catch (e) {
-      console.error("Failed to write drafts to disk", e);
-      setAutosaveStatus('Save Failed');
-    }
+    return saveUserDraftsToDisk(draftsList, currentUser);
   };
 
   // Supabase Auth with Google OAuth
